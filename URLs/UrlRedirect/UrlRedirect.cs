@@ -1,58 +1,63 @@
 using System;
-using System.IO;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Azure.WebJobs;
-using Microsoft.Azure.WebJobs.Extensions.Http;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using DataStorage.Azure;
 using RambalacHome.Function.Storage.Models;
 using System.Threading;
 using System.Net.Http;
 using System.Text.Json;
-using System.Web.Http;
 using Microsoft.Extensions.Caching.Memory;
 using System.Collections.Generic;
 using System.Linq;
+using System.Web;
+using System.Collections.Specialized;
+using System.Net;
+using Microsoft.Azure.Functions.Worker;
+using Microsoft.Azure.Functions.Worker.Http;
 using EnumerableExtionsions;
+using System.IO;
+using System.Text;
 
 namespace RambalacHome.Function
 {
     public class UrlRedirect
     {
-        private readonly ITableStorage storage;
-        private readonly HttpClient http;
-        private readonly FunctionSettings settings;
-        private readonly IMemoryCache cache;
-        private readonly HashSet<string> ignoreId = new HashSet<string>() { "robots.txt", "favicon.ico" };
+        private static HashSet<string> ignoreId = new HashSet<string>() { "robots.txt", "favicon.ico" };
 
-        public UrlRedirect(ITableStorage storage, HttpClient http, FunctionSettings settings, IMemoryCache cache)
+        private static T GetService<T>(FunctionContext context)
         {
-            this.storage = storage;
-            this.http = http;
-            this.settings = settings;
-            this.cache = cache;
+            return (T)context.InstanceServices.GetService(typeof(T));
         }
 
-        [FunctionName("UrlRedirect")]
-        public async Task<IActionResult> Run(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "{*id}")] HttpRequest req,
-            string id,
-            ILogger log,
-            CancellationToken cancellation)
+        private static void SetServices(FunctionContext context)
         {
-            if (id == null||ignoreId.Contains(id))
+
+        }
+
+        [Function("UrlRedirect")]
+        public static async Task<HttpResponseData> Run(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "{*id}")] HttpRequestData req,
+            string id,
+            FunctionContext context)
+        {
+            var log = context.GetLogger<UrlRedirect>();
+            var storage = GetService<ITableStorage>(context);
+            var http = GetService<HttpClient>(context);
+            var settings = GetService<FunctionSettings>(context);
+            var cache = GetService<IMemoryCache>(context);
+            var cancellation = CancellationToken.None;
+
+            if (id == null || ignoreId.Contains(id))
             {
-                return new NotFoundResult();
+                return req.CreateResponse(HttpStatusCode.NotFound);
             }
 
-            var host = req.Headers["Host"].ToString();
+            var host = req.Headers.TryGetValues("Host", out var hosts) ? hosts.FirstOrDefault()?.ToString() : null;
             log.LogInformation($"UrlRedirect for {host} {id} ");
 
             try
             {
-                var ip = req.Headers.TryGetValue("X-Forwarded-For", out var ipval) ? ipval.ToString() : req.HttpContext.Connection.RemoteIpAddress.ToString();
+                var ip = req.Headers.TryGetValues("X-Forwarded-For", out var ipval) ? ipval.FirstOrDefault()?.ToString() : "";
                 ip = ip.Split(":")[0];
 
                 var logRecord = new UrlRedirectLog(ip, host, "ID N/A", id);
@@ -67,14 +72,16 @@ namespace RambalacHome.Function
                 {
                     log.LogWarning($"Not found |{host}/{id}|");
                     await storage.InsertAsync(logRecord, cancellation);
-                    return new NotFoundResult();
+                    return req.CreateResponse(HttpStatusCode.NotFound);
                 }
 
-                if (record.Fields.Count==1)
+                if (record.Fields.Count == 1)
                 {
                     logRecord.Country = "Ignore";
                     await storage.InsertAsync(logRecord, cancellation);
-                    return new RedirectResult(record.Fields.First().Value.ToString(), true);
+                    var response = req.CreateResponse(HttpStatusCode.PermanentRedirect);
+                    response.Headers.Add("Location", new[] { record.Fields.First().Value.ToString() });
+                    return response;
                 }
 
                 var country = await cache.GetOrCreateAsync("ip_" + ip, async entity =>
@@ -89,15 +96,23 @@ namespace RambalacHome.Function
                 await storage.InsertAsync(logRecord, cancellation);
 
                 var link = record.Fields.GetFirstOf(new[] { country, "default", "US" }) ?? record.Fields.First().Value;
-                return new RedirectResult(link.ToString(), true);
+                var newUrl = new UriBuilder(link);
+                var newLinkCollection = HttpUtility.ParseQueryString(newUrl.Query);
+                var oldLinkCollection = HttpUtility.ParseQueryString(req.Url.Query);
+                oldLinkCollection.Add(newLinkCollection);
+
+                newUrl.Query = oldLinkCollection.ToString();
+
+                var newLink = req.CreateResponse(HttpStatusCode.PermanentRedirect);
+                newLink.Headers.Add("Location", new[] { newUrl.ToString() });
+
+                return newLink;
             }
             catch (Exception ex)
             {
-                return new ContentResult()
-                {
-                    Content = ex.Message,
-                    StatusCode = 500,
-                };
+                var response = req.CreateResponse(HttpStatusCode.InternalServerError);
+                response.Body = new MemoryStream(Encoding.UTF8.GetBytes(ex.Message));
+                return response;
             }
         }
     }

@@ -1,8 +1,6 @@
-﻿using DataStorage.Azure;
-using DataStorage.Core;
+﻿using DataStorage.Core;
 using Microsoft.Azure.Cosmos.Table;
 using System;
-using System.Collections.Generic;
 using System.Text;
 
 namespace RambalacHome.Function.Storage.Models

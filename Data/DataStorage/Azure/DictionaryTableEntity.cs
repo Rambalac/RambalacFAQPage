@@ -12,7 +12,7 @@ namespace DataStorage.Azure
     /// <summary>
     /// Entity with dynamic number of fields.
     /// </summary>
-    public class DictionaryTableEntity : TableEntity
+    public class DictionaryTableEntity<T> : TableEntity where T : class
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="DictionaryTableEntity" /> class.
@@ -38,7 +38,7 @@ namespace DataStorage.Azure
         /// <param name="partitionKey">Partition Key.</param>
         /// <param name="rowKey">Row Key.</param>
         /// <param name="fields">Field to pre-initialize.</param>
-        protected DictionaryTableEntity(string partitionKey, string rowKey, Dictionary<string, object> fields)
+        protected DictionaryTableEntity(string partitionKey, string rowKey, Dictionary<string, T> fields)
             : base(partitionKey, rowKey)
         {
             Fields = fields;
@@ -48,7 +48,7 @@ namespace DataStorage.Azure
         /// Gets fields dictionary.
         /// </summary>
 
-        public Dictionary<string, object> Fields { get; } = new Dictionary<string, object>();
+        public Dictionary<string, T> Fields { get; } = new Dictionary<string, T>();
 
         /// <inheritdoc />
         public override void ReadEntity(
@@ -93,7 +93,7 @@ namespace DataStorage.Azure
                         throw new NotSupportedException("Field is not supported: " + prop.Value.PropertyType);
                 }
 
-                Fields[prop.Key] = val;
+                Fields[prop.Key] = (T)val;
             }
         }
 
