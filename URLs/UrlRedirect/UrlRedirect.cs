@@ -47,23 +47,25 @@ namespace RambalacHome.Function
                 return new NotFoundResult();
             }
 
-            log.LogInformation($"UrlRedirect for {id}");
+            var host = req.Headers["Host"].ToString();
+            log.LogInformation($"UrlRedirect for {host} {id} ");
 
             try
             {
                 var ip = req.Headers.TryGetValue("X-Forwarded-For", out var ipval) ? ipval.ToString() : req.HttpContext.Connection.RemoteIpAddress.ToString();
                 ip = ip.Split(":")[0];
 
-                var logRecord = new UrlRedirectLog(ip, req.Host.ToString(), "ID N/A", id);
+                var logRecord = new UrlRedirectLog(ip, host, "ID N/A", id);
 
-                var record = await cache.GetOrCreateAsync("url_" + id, async entity =>
+                var record = await cache.GetOrCreateAsync($"url_{host}_{id}", async entity =>
                   {
                       entity.SetSize(0);
-                      return await storage.RetrieveAsync<UrlRecord>(id, id, cancellation);
+                      return await storage.RetrieveAsync<UrlRecord>(host, id, cancellation);
                   });
 
                 if (record == null)
                 {
+                    log.LogWarning($"Not found |{host}/{id}|");
                     await storage.InsertAsync(logRecord, cancellation);
                     return new NotFoundResult();
                 }
